@@ -5,6 +5,7 @@ import subprocess
 import threading
 import time
 import sys
+import logging
 
 # Hack to enable --user packages to be used when runnig as root (which is needed for piHomeEasy, omg).
 sys.path.append("/home/pi/.local/lib/python3.7/site-packages")
@@ -12,6 +13,10 @@ sys.path.append("/usr/local/lib/python3.7/dist-packages")
 import pyaudio
 from gpiozero import Button
 import vosk
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+LOGGER = logging.getLogger("main")
+
 
 class Recorder:
     def __init__(self):
@@ -50,8 +55,8 @@ class Recorder:
     def printDeviceInfo(self):
         for i in range(self.pyaudio.get_device_count()):
             dev = self.pyaudio.get_device_info_by_index(i)
-            print(dev)
-            print((i, dev['name'], dev['maxInputChannels'], dev['defaultSampleRate']))
+            LOGGER.info(dev)
+            LOGGER.info((i, dev['name'], dev['maxInputChannels'], dev['defaultSampleRate']))
 
     def addFramesToVector(self,
                           in_data,
@@ -112,18 +117,18 @@ class VoiceController:
 
                 # We have been woken up by the handset being lifted.
                 # Keep recording until it is put down again.
-                print("Start recording")
+                LOGGER.info("Start recording")
                 self.recorder.start()
                 while self.handset.active:
                     time.sleep(0.1)
 
-                print("Stopping recorder...")
+                LOGGER.info("Stopping recorder...")
                 self.recorder.stop()
                 time.sleep(0.1)
-                print(f"Recording done. Got {len(self.recorder.chunks)} chunks.")
+                LOGGER.info(f"Recording done. Got {len(self.recorder.chunks)} chunks.")
 
                 num_secs = len(self.recorder.chunks) * self.recorder.chunk / (self.recorder.fs)
-                print(f"num_secs: {num_secs}")
+                LOGGER.info(f"num_secs: {num_secs}")
 
                 audio_data = self.recorder.getNextChunk()
                 while audio_data is not None:
@@ -131,7 +136,7 @@ class VoiceController:
                     audio_data = self.recorder.getNextChunk()
 
                 result = self.recognizer.FinalResult()
-                print(result)
+                LOGGER.info(result)
                 self.recognizer = vosk.KaldiRecognizer(self.voice_model, self.recorder.fs, self.grammar)
 
 
@@ -144,26 +149,26 @@ class VoiceController:
                 # We have been woken up by the handset being lifted.
                 # Keep recording until it is put down again.
 
-                print("Start recording")
+                LOGGER.info("Start recording")
                 self.recorder.start()
                 frames = []
                 while self.handset.active:
                     data = self.recorder.stream.read(self.recorder.chunk)
                     frames.append(data)
 
-                print("Stopping recorder...")
+                LOGGER.info("Stopping recorder...")
                 self.recorder.stop()
 
-                print(f"Recording done. Got {len(frames)} chunks.")
+                LOGGER.info(f"Recording done. Got {len(frames)} chunks.")
 
                 num_secs = len(frames) * self.recorder.chunk / (self.recorder.fs)
-                print(f"num_secs: {num_secs}")
+                LOGGER.info(f"num_secs: {num_secs}")
 
                 for audio_data in frames:
                     self.recognizer.AcceptWaveform(audio_data)
 
                 result = self.recognizer.FinalResult()
-                print(result)
+                LOGGER.info(result)
                 self.recognizer = vosk.KaldiRecognizer(self.voice_model, self.recorder.fs, self.grammar)
 
 
@@ -176,14 +181,14 @@ class Handset:
         self.active = False
 
     def callbackHandsetLifted(self):
-        print("Handset lifted")
+        LOGGER.info("Handset lifted")
         with self.condition:
             self.active = True
             self.condition.notify_all()
 
 
     def callbackHandsetPutDown(self):
-        print("Handset put down")
+        LOGGER.info("Handset put down")
         self.active = False
 
 
@@ -196,9 +201,9 @@ class LampController:
        self.allOff()
 
     def toggle(self, lamp_idx):
-        print("Toggle:", lamp_idx)
+        LOGGER.info(f"Toggle: {lamp_idx}")
         if lamp_idx >= len(self.lamp_state):
-            print("No lamp at index:", lamp_idx)
+            LOGGER.info(f"No lamp at index {lamp_idx}")
             return
 
         if self.lamp_state[lamp_idx]:
@@ -207,9 +212,9 @@ class LampController:
             self.turnOn(lamp_idx)
 
     def turnOff(self, lamp_idx):
-        print("Turn off:", lamp_idx)
+        LOGGER.info(f"Turn off: {lamp_idx}")
         if lamp_idx >= len(self.lamp_state):
-            print("No lamp at index:", lamp_idx)
+            LOGGER.info(f"No lamp at index: {lamp_idx}")
             return
 
         if lamp_idx >= 0:
@@ -217,15 +222,15 @@ class LampController:
         elif lamp_idx == -1:
             self.lamp_state = [False]*len(self.lamp_state)
         else:
-            print(f"Bad lamp idx '{lamp_idx}'")
+            LOGGER.info(f"Bad lamp idx '{lamp_idx}'")
             return
 
         self._callPiHomeEasy(lamp_idx, "off")
 
     def turnOn(self, lamp_idx):
-        print("Turn on:", lamp_idx)
+        LOGGER.info(f"Turn on: {lamp_idx}")
         if lamp_idx >= len(self.lamp_state):
-            print("No lamp at index:", lamp_idx)
+            LOGGER.info(f"No lamp at index: {lamp_idx}")
             return
 
         if lamp_idx >= 0:
@@ -233,21 +238,20 @@ class LampController:
         elif lamp_idx == -1:
             self.lamp_state = [True]*len(self.lamp_state)
         else:
-            print(f"Bad lamp idx '{lamp_idx}'")
+            LOGGER.info(f"Bad lamp idx: {lamp_idx}")
             return
 
         self._callPiHomeEasy(lamp_idx, "on")
 
     def allOff(self):
-        print("All off")
+        LOGGER.info("All off")
         self.turnOff(-1)
 
     def _callPiHomeEasy(self, receiver_id, state):
-        bin_path = "/home/pi/piHomeEasy/piHomeEasy"
-        command = [bin_path, str(self.rf_pin), str(self.emitter_id), str(receiver_id), state]
-        print(f"Call piHomeEasy: {command}")
+        command = ["piHomeEasy", str(self.rf_pin), str(self.emitter_id), str(receiver_id), state]
+        LOGGER.info(f"Call piHomeEasy: {command}")
         ret = subprocess.run(command)
-        print("Exit code:", ret.returncode)
+        LOGGER.info(f"Exit code: {ret.returncode}")
 
 
 class RotaryDial:
@@ -269,7 +273,7 @@ class RotaryDial:
 
     def callbackActiveFalse(self):
         self.is_active = False
-        print("Got some pulses:", self.pulses)
+        LOGGER.info(f"Got some pulses: {self.pulses}")
 
         if self.pulses == 1:
             self.lamp_controller.allOff()
@@ -295,7 +299,7 @@ def main():
     handset = Handset(condition)
     voice_controller = VoiceController(handset)
 
-    print("Started. Waiting for input.")
+    LOGGER.info("Started. Waiting for input.")
     voice_controller.runForever()
 
 
