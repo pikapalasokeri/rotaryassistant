@@ -5,7 +5,7 @@
 
 ```
 sudo apt install python3-pip libgfortran3 portaudio19-dev wiringpi
-pip3 install vosk pyaudio --user
+pip3 install vosk pyaudio gpiozero --user
 
 wget https://alphacephei.com/kaldi/models/vosk-model-small-en-us-0.3.zip
 unzip vosk-model-small-en-us-0.3.zip
@@ -26,4 +26,3 @@ rm -rf piHomeEasy
   - 1337 is the transmitter number.
   - 0 is the receiver number, change this for each switch.
   
-
