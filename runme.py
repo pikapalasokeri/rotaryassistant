@@ -6,6 +6,7 @@ import threading
 import time
 import sys
 import logging
+import json
 
 # Hack to enable --user packages to be used when runnig as root (which is needed for piHomeEasy, omg).
 sys.path.append("/home/pi/.local/lib/python3.7/site-packages")
@@ -79,32 +80,40 @@ class Recorder:
         self.current_chunk = 0
 
 
-def _getGrammar(sentences):
+def _getGrammar(commands):
     all_words = set()
-    for sentence in sentences:
+    for sentence, _ in commands.items():
         for word in sentence.split(" "):
             all_words.add(word)
     return " ".join(all_words)
 
 
 class VoiceController:
-    def __init__(self, handset):
+    def __init__(self, handset, lamp_controller):
         self.handset = handset
         self.condition = self.handset.condition
+        self.lamp_controller = lamp_controller
         self.recorder = Recorder()
         self.voice_model  = vosk.Model("/home/pi/vosk-model-small-en-us-0.3")
-        self.commands = ["turn on turtle",
-                         "turn off turtle",
-                         "turn on green",
-                         "turn off green",
-                         "turn on blue",
-                         "turn off blue",
-                         "turn on corner",
-                         "turn off corner",
-                         "engage party mode",
-                         "let there be light",
-                         "you all suck",
-                         "good night",]
+        mapping = {"green": 0,
+                   "turtle": 1,
+                   "corner": 2,
+                   "yellow": 3,
+                   "blue": 4}
+        self.commands = {"turn on turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOn(idx),
+                         "turn off turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOff(idx),
+                         "turn on green": lambda idx=mapping["green"]: self.lamp_controller.turnOn(idx),
+                         "turn off green": lambda idx=mapping["green"]: self.lamp_controller.turnOff(idx),
+                         "turn on blue": lambda idx=mapping["blue"]: self.lamp_controller.turnOn(idx),
+                         "turn off blue": lambda idx=mapping["blue"]: self.lamp_controller.turnOff(idx),
+                         "turn on corner": lambda idx=mapping["corner"]: self.lamp_controller.turnOn(idx),
+                         "turn off corner": lambda idx=mapping["corner"]: self.lamp_controller.turnOff(idx),
+                         "turn on yellow": lambda idx=mapping["yellow"]: self.lamp_controller.turnOn(idx),
+                         "turn off yellow": lambda idx=mapping["yellow"]: self.lamp_controller.turnOff(idx),
+                         "engage party mode": self.partyMode,
+                         "let there be light": self.lamp_controller.allOn,
+                         "you all suck": self.lamp_controller.allOff,
+                         "good night": self.lamp_controller.allOff}
         self.grammar = _getGrammar(self.commands)
         self.recognizer = vosk.KaldiRecognizer(self.voice_model, self.recorder.fs, self.grammar)
 
@@ -137,6 +146,14 @@ class VoiceController:
 
                 result = self.recognizer.FinalResult()
                 LOGGER.info(result)
+                json_result = json.loads(result)
+                if "text" in json_result:
+                    text = json_result["text"]
+                    if text in self.commands:
+                        LOGGER.info(f"Text is command. Running '{text}'.")
+                        command_func = self.commands[text]
+                        command_func()
+
                 self.recognizer = vosk.KaldiRecognizer(self.voice_model, self.recorder.fs, self.grammar)
 
 
@@ -170,6 +187,9 @@ class VoiceController:
                 result = self.recognizer.FinalResult()
                 LOGGER.info(result)
                 self.recognizer = vosk.KaldiRecognizer(self.voice_model, self.recorder.fs, self.grammar)
+
+    def partyMode(self):
+        pass
 
 
 class Handset:
@@ -247,6 +267,10 @@ class LampController:
         LOGGER.info("All off")
         self.turnOff(-1)
 
+    def allOn(self):
+        LOGGER.info("All on")
+        self.turnOn(-1)
+
     def _callPiHomeEasy(self, receiver_id, state):
         command = ["piHomeEasy", str(self.rf_pin), str(self.emitter_id), str(receiver_id), state]
         LOGGER.info(f"Call piHomeEasy: {command}")
@@ -297,7 +321,7 @@ def main():
 
     condition = threading.Condition()
     handset = Handset(condition)
-    voice_controller = VoiceController(handset)
+    voice_controller = VoiceController(handset, lamp_controller)
 
     LOGGER.info("Started. Waiting for input.")
     voice_controller.runForever()
