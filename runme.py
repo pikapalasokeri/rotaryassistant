@@ -7,6 +7,7 @@ import time
 import sys
 import logging
 import json
+import multiprocessing
 
 # Hack to enable --user packages to be used when runnig as root (which is needed for piHomeEasy, omg).
 sys.path.append("/home/pi/.local/lib/python3.7/site-packages")
@@ -19,10 +20,31 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 LOGGER = logging.getLogger("main")
 
 
+def processVoskForever(pipe, fs, grammar):
+    voice_model  = vosk.Model("/home/pi/vosk-model-small-en-us-0.3")
+    # TODO: Set process prio low.
+    while True:
+        recognizer = vosk.KaldiRecognizer(voice_model, fs, grammar)
+        LOGGER.info("KaldiRecognizer created.")
+
+        continue_processing = True
+        while continue_processing:
+            data = pipe.recv()
+            if len(data) == 0:
+                continue_processing = False
+                LOGGER.info("Got end of line from audio pipe.")
+            else:
+                recognizer.AcceptWaveform(data)
+
+        result = recognizer.FinalResult()
+        LOGGER.info(f"Got final result from recognizer:\n{result}")
+        pipe.send(result)
+        LOGGER.info("Result was sent on pipe.")
+
+
 class Recorder:
-    def __init__(self):
-        self.chunks = []
-        self.current_chunk = 0
+    def __init__(self, pipe):
+        self.num_chunks = 0
         self.pyaudio = pyaudio.PyAudio()
 
         # Chunk size needs to be large enough, otherwise parts of the audio will be dropped.
@@ -32,26 +54,33 @@ class Recorder:
         # Sample rate needs to be 48000 or something like that for the drivers to accept it.
         self.fs = 44100
 
+        self.pipe = pipe
+        self.stream = None
+        self.printDeviceInfo()
+        #self.stop()
 
+    def start(self):
+        self.num_chunks = 0
+        self.stream.start_stream()
+
+    def stop(self):
+        if self.stream is not None:
+            LOGGER.info("Stopping stream...")
+            self.stream.stop_stream()
+            self.stream.close()
+            LOGGER.info("Done.")
+            self.pipe.send(bytearray())
+        LOGGER.info("Creating new stream...")
         self.stream = self.pyaudio.open(format=self.sample_format,
                                         channels=self.channels,
                                         rate=self.fs,
                                         frames_per_buffer=self.chunk,
-                                        stream_callback=self.addFramesToVector,
+                                        stream_callback=self.addFramesToPipe,
                                         input_device_index=2, # 2 = antlion zero, 5 = laptop,
                                                               # 6 = antlion laptop, empty = system default.
                                         input=True,
                                         start=False)
-
-        self.printDeviceInfo()
-
-    def start(self):
-        self.chunks.clear()
-        self.current_chunk = 0
-        self.stream.start_stream()
-
-    def stop(self):
-        self.stream.stop_stream()
+        LOGGER.info("Done.")
 
     def printDeviceInfo(self):
         for i in range(self.pyaudio.get_device_count()):
@@ -59,25 +88,14 @@ class Recorder:
             LOGGER.info(dev)
             LOGGER.info((i, dev['name'], dev['maxInputChannels'], dev['defaultSampleRate']))
 
-    def addFramesToVector(self,
-                          in_data,
-                          frame_count,
-                          time_info,
-                          status_flags):
-        self.chunks.append(in_data)
+    def addFramesToPipe(self,
+                        in_data,
+                        frame_count,
+                        time_info,
+                        status_flags):
+        self.pipe.send(in_data)
+        self.num_chunks += 1
         return (in_data, pyaudio.paContinue)
-
-    def getNextChunk(self):
-        if len(self.chunks) > self.current_chunk:
-            chunk_return_ix = self.current_chunk
-            self.current_chunk += 1
-            return self.chunks[chunk_return_ix]
-        else:
-            return None
-
-    def clear(self):
-        self.chunks.clear()
-        self.current_chunk = 0
 
 
 def _getGrammar(commands):
@@ -93,15 +111,14 @@ class VoiceController:
         self.handset = handset
         self.condition = self.handset.condition
         self.lamp_controller = lamp_controller
-        self.recorder = Recorder()
-        self.voice_model  = vosk.Model("/home/pi/vosk-model-small-en-us-0.3")
+
         mapping = {"green": 0,
                    "turtle": 1,
                    "corner": 2,
                    "yellow": 3,
                    "blue": 4}
-        self.commands = {"turn on turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOn(idx),
-                         "turn off turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOff(idx),
+        self.commands = {"enable turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOn(idx),
+                         "disable turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOff(idx),
                          "turn on green": lambda idx=mapping["green"]: self.lamp_controller.turnOn(idx),
                          "turn off green": lambda idx=mapping["green"]: self.lamp_controller.turnOff(idx),
                          "turn on blue": lambda idx=mapping["blue"]: self.lamp_controller.turnOn(idx),
@@ -114,11 +131,25 @@ class VoiceController:
                          "let there be light": self.lamp_controller.allOn,
                          "you all suck": self.lamp_controller.allOff,
                          "good night": self.lamp_controller.allOff}
+
         self.grammar = _getGrammar(self.commands)
-        self.recognizer = vosk.KaldiRecognizer(self.voice_model, self.recorder.fs, self.grammar)
+
+        self.pipe_recorder_end, self.pipe_processor_end = multiprocessing.Pipe()
+        self.recorder = Recorder(self.pipe_recorder_end)
+        self.vosk_process = multiprocessing.Process(target=processVoskForever,
+                                                    args=(self.pipe_processor_end,
+                                                          self.recorder.fs,
+                                                          self.grammar))
+        self.vosk_process.start()
 
 
     def runForever(self):
+        # This is done here since it didn't work to have it in the constructor.
+        # Probably due to forking of this process _after_ the stream is constructed
+        # messes things up. With the stop() call here we fork the process _before_
+        # stream is constructed and so we don't get any conflicts.
+        self.recorder.stop()
+
         while True:
             with self.condition:
                 while not self.handset.active:
@@ -134,17 +165,12 @@ class VoiceController:
                 LOGGER.info("Stopping recorder...")
                 self.recorder.stop()
                 time.sleep(0.1)
-                LOGGER.info(f"Recording done. Got {len(self.recorder.chunks)} chunks.")
+                LOGGER.info(f"Recording done. Got {self.recorder.num_chunks} chunks.")
 
-                num_secs = len(self.recorder.chunks) * self.recorder.chunk / (self.recorder.fs)
+                num_secs = self.recorder.num_chunks * self.recorder.chunk / (self.recorder.fs)
                 LOGGER.info(f"num_secs: {num_secs}")
 
-                audio_data = self.recorder.getNextChunk()
-                while audio_data is not None:
-                    self.recognizer.AcceptWaveform(audio_data)
-                    audio_data = self.recorder.getNextChunk()
-
-                result = self.recognizer.FinalResult()
+                result = self.pipe_recorder_end.recv()
                 LOGGER.info(result)
                 json_result = json.loads(result)
                 if "text" in json_result:
@@ -153,40 +179,8 @@ class VoiceController:
                         LOGGER.info(f"Text is command. Running '{text}'.")
                         command_func = self.commands[text]
                         command_func()
-
-                self.recognizer = vosk.KaldiRecognizer(self.voice_model, self.recorder.fs, self.grammar)
-
-
-    def runForever2(self):
-        while True:
-            with self.condition:
-                while not self.handset.active:
-                    self.condition.wait()
-
-                # We have been woken up by the handset being lifted.
-                # Keep recording until it is put down again.
-
-                LOGGER.info("Start recording")
-                self.recorder.start()
-                frames = []
-                while self.handset.active:
-                    data = self.recorder.stream.read(self.recorder.chunk)
-                    frames.append(data)
-
-                LOGGER.info("Stopping recorder...")
-                self.recorder.stop()
-
-                LOGGER.info(f"Recording done. Got {len(frames)} chunks.")
-
-                num_secs = len(frames) * self.recorder.chunk / (self.recorder.fs)
-                LOGGER.info(f"num_secs: {num_secs}")
-
-                for audio_data in frames:
-                    self.recognizer.AcceptWaveform(audio_data)
-
-                result = self.recognizer.FinalResult()
-                LOGGER.info(result)
-                self.recognizer = vosk.KaldiRecognizer(self.voice_model, self.recorder.fs, self.grammar)
+                    else:
+                        LOGGER.info("Text didn't match any command.")
 
     def partyMode(self):
         pass
@@ -205,7 +199,6 @@ class Handset:
         with self.condition:
             self.active = True
             self.condition.notify_all()
-
 
     def callbackHandsetPutDown(self):
         LOGGER.info("Handset put down")
@@ -306,17 +299,14 @@ class RotaryDial:
 
         self.pulses = 0
 
-
     def callbackPulseDetected(self):
         if self.is_active:
             self.pulses += 1
 
 
 def main():
-    lamp_mapping = {"green": 0,
-                    "turtle": 1}
-
-    lamp_controller = LampController(len(lamp_mapping))
+    num_lamps = 2
+    lamp_controller = LampController(num_lamps)
     rotary_dial = RotaryDial(lamp_controller)
 
     condition = threading.Condition()
