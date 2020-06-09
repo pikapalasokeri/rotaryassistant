@@ -4,7 +4,7 @@
 # Installing on target
 
 ```
-sudo apt install python3-pip libgfortran3 portaudio19-dev wiringpi
+sudo apt install python3-pip libgfortran3 portaudio19-dev wiringpi python3-numpy
 pip3 install vosk pyaudio gpiozero --user
 
 wget https://alphacephei.com/kaldi/models/vosk-model-small-en-us-0.3.zip

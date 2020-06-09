@@ -8,6 +8,8 @@ import sys
 import logging
 import json
 import multiprocessing
+import numpy as np
+from collections import deque
 
 # Hack to enable --user packages to be used when runnig as root (which is needed for piHomeEasy, omg).
 sys.path.append("/home/pi/.local/lib/python3.7/site-packages")
@@ -22,19 +24,56 @@ LOGGER = logging.getLogger("main")
 
 def processVoskForever(pipe, fs, grammar):
     voice_model  = vosk.Model("/home/pi/vosk-model-small-en-us-0.3")
+    max_num_iters_without_sound = 3
+    buffer_size = max_num_iters_without_sound
     # TODO: Set process prio low.
     while True:
         recognizer = vosk.KaldiRecognizer(voice_model, fs, grammar)
         LOGGER.info("KaldiRecognizer created.")
 
-        continue_processing = True
-        while continue_processing:
+        chunk_buffer = deque(maxlen=buffer_size)
+        got_sound = False
+        consecutive_without_sound = 0
+        pipe_has_data = True
+        bail_early = False
+        while pipe_has_data and not bail_early:
             data = pipe.recv()
             if len(data) == 0:
-                continue_processing = False
+                pipe_has_data = False
                 LOGGER.info("Got end of line from audio pipe.")
             else:
-                recognizer.AcceptWaveform(data)
+                # Insert new chunk into buffer.
+                chunk_buffer.append(data)
+                float_data = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+                rms = np.sqrt(float_data.dot(float_data) / float_data.size)
+                LOGGER.info(f"rms: {rms}")
+                if rms > 200.0:
+                    got_sound = True
+                    consecutive_without_sound = 0
+                else:
+                    consecutive_without_sound += 1
+
+                if got_sound:
+                    # If we have got some sound, start popping from the chunk buffer.
+                    # This will mean that processing is delayed a few iterations.
+                    # It also means that we won't cut any speech from the stream when
+                    # we start talking in the middle of a chunk.
+                    recognizer.AcceptWaveform(chunk_buffer.popleft())
+
+                # If we have started actually processing due to there being sound some chunk,
+                # and we then have a number of chunks without any sounds, consider done.
+                if got_sound and consecutive_without_sound > max_num_iters_without_sound:
+                    bail_early = True
+
+        # Empty chunk buffer into recognizer.
+        LOGGER.info("Emptying buffer.")
+        while len(chunk_buffer) > 0:
+            recognizer.AcceptWaveform(chunk_buffer.popleft())
+
+        # Empty pipe.
+        LOGGER.info("Emptying leftovers in pipe.")
+        while pipe_has_data:
+            pipe_has_data = len(pipe.recv()) != 0
 
         result = recognizer.FinalResult()
         LOGGER.info(f"Got final result from recognizer:\n{result}")
@@ -57,7 +96,8 @@ class Recorder:
         self.pipe = pipe
         self.stream = None
         self.printDeviceInfo()
-        #self.stop()
+
+        self.num_chunks_to_skip = 6
 
     def start(self):
         self.num_chunks = 0
@@ -93,8 +133,9 @@ class Recorder:
                         frame_count,
                         time_info,
                         status_flags):
-        self.pipe.send(in_data)
         self.num_chunks += 1
+        if self.num_chunks > self.num_chunks_to_skip:
+            self.pipe.send(in_data)
         return (in_data, pyaudio.paContinue)
 
 
@@ -117,16 +158,16 @@ class VoiceController:
                    "corner": 2,
                    "yellow": 3,
                    "blue": 4}
-        self.commands = {"enable turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOn(idx),
-                         "disable turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOff(idx),
-                         "turn on green": lambda idx=mapping["green"]: self.lamp_controller.turnOn(idx),
-                         "turn off green": lambda idx=mapping["green"]: self.lamp_controller.turnOff(idx),
-                         "turn on blue": lambda idx=mapping["blue"]: self.lamp_controller.turnOn(idx),
-                         "turn off blue": lambda idx=mapping["blue"]: self.lamp_controller.turnOff(idx),
-                         "turn on corner": lambda idx=mapping["corner"]: self.lamp_controller.turnOn(idx),
-                         "turn off corner": lambda idx=mapping["corner"]: self.lamp_controller.turnOff(idx),
-                         "turn on yellow": lambda idx=mapping["yellow"]: self.lamp_controller.turnOn(idx),
-                         "turn off yellow": lambda idx=mapping["yellow"]: self.lamp_controller.turnOff(idx),
+        self.commands = {"activate turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOn(idx),
+                         "shut down turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOff(idx),
+                         "activate green": lambda idx=mapping["green"]: self.lamp_controller.turnOn(idx),
+                         "shut down green": lambda idx=mapping["green"]: self.lamp_controller.turnOff(idx),
+                         "activate blue": lambda idx=mapping["blue"]: self.lamp_controller.turnOn(idx),
+                         "shut down blue": lambda idx=mapping["blue"]: self.lamp_controller.turnOff(idx),
+                         "activate corner": lambda idx=mapping["corner"]: self.lamp_controller.turnOn(idx),
+                         "shut down corner": lambda idx=mapping["corner"]: self.lamp_controller.turnOff(idx),
+                         "activate yellow": lambda idx=mapping["yellow"]: self.lamp_controller.turnOn(idx),
+                         "shut down yellow": lambda idx=mapping["yellow"]: self.lamp_controller.turnOff(idx),
                          "engage party mode": self.partyMode,
                          "let there be light": self.lamp_controller.allOn,
                          "you all suck": self.lamp_controller.allOff,
