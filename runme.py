@@ -168,6 +168,8 @@ class VoiceController:
                          "shut down corner": lambda idx=mapping["corner"]: self.lamp_controller.turnOff(idx),
                          "activate yellow": lambda idx=mapping["yellow"]: self.lamp_controller.turnOn(idx),
                          "shut down yellow": lambda idx=mapping["yellow"]: self.lamp_controller.turnOff(idx),
+                         "activate everything": self.lamp_controller.allOn,
+                         "shut down everything": self.lamp_controller.allOff,
                          "engage party mode": self.partyMode,
                          "let there be light": self.lamp_controller.allOn,
                          "you all suck": self.lamp_controller.allOff,
