@@ -215,11 +215,14 @@ class VoiceController:
                 json_result = json.loads(result)
                 if "text" in json_result:
                     text = json_result["text"]
-                    if text in self.commands:
-                        LOGGER.info(f"Text is command. Running '{text}'.")
-                        command_func = self.commands[text]
-                        command_func()
-                    else:
+                    matched_command = False
+                    for command_text, command_func in self.commands.items():
+                        if command_text in text:
+                            LOGGER.info(f"Text is likely command. '{text}'. Running '{command_text}'.")
+                            command_func()
+                            matched_command = True
+                            break
+                    if not matched_command:
                         LOGGER.info("Text didn't match any command.")
 
 
