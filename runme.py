@@ -149,31 +149,25 @@ def _getGrammar(commands):
 
 
 class VoiceController:
-    def __init__(self, handset, lamp_controller):
+    def __init__(self, handset, lamp_controller, mapping):
         self.handset = handset
         self.condition = self.handset.condition
         self.lamp_controller = lamp_controller
-
-        mapping = {"green": 0,
-                   "turtle": 1,
-                   "corner": 2,
-                   "yellow": 3,
-                   "blue": 4}
-        self.commands = {"activate turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOn(idx),
-                         "shut down turtle": lambda idx=mapping["turtle"]: self.lamp_controller.turnOff(idx),
-                         "activate green": lambda idx=mapping["green"]: self.lamp_controller.turnOn(idx),
-                         "shut down green": lambda idx=mapping["green"]: self.lamp_controller.turnOff(idx),
-                         "activate blue": lambda idx=mapping["blue"]: self.lamp_controller.turnOn(idx),
-                         "shut down blue": lambda idx=mapping["blue"]: self.lamp_controller.turnOff(idx),
-                         "activate corner": lambda idx=mapping["corner"]: self.lamp_controller.turnOn(idx),
-                         "shut down corner": lambda idx=mapping["corner"]: self.lamp_controller.turnOff(idx),
-                         "activate yellow": lambda idx=mapping["yellow"]: self.lamp_controller.turnOn(idx),
-                         "shut down yellow": lambda idx=mapping["yellow"]: self.lamp_controller.turnOff(idx),
+        self.mapping = mapping
+        self.commands = {"activate turtle": lambda idx=self.mapping["turtle"]: self.lamp_controller.turnOn(idx),
+                         "shut down turtle": lambda idx=self.mapping["turtle"]: self.lamp_controller.turnOff(idx),
+                         "activate green": lambda idx=self.mapping["green"]: self.lamp_controller.turnOn(idx),
+                         "shut down green": lambda idx=self.mapping["green"]: self.lamp_controller.turnOff(idx),
+                         "activate blue": lambda idx=self.mapping["blue"]: self.lamp_controller.turnOn(idx),
+                         "shut down blue": lambda idx=self.mapping["blue"]: self.lamp_controller.turnOff(idx),
+                         "activate corner": lambda idx=self.mapping["corner"]: self.lamp_controller.turnOn(idx),
+                         "shut down corner": lambda idx=self.mapping["corner"]: self.lamp_controller.turnOff(idx),
+                         "activate yellow": lambda idx=self.mapping["yellow"]: self.lamp_controller.turnOn(idx),
+                         "shut down yellow": lambda idx=self.mapping["yellow"]: self.lamp_controller.turnOff(idx),
                          "activate everything": self.lamp_controller.allOn,
                          "shut down everything": self.lamp_controller.allOff,
                          "activate random": self.lamp_controller.randomOn,
                          "shut down random": self.lamp_controller.randomOff,
-                         "engage party mode": self.partyMode,
                          "let there be light": self.lamp_controller.allOn,
                          "you all suck": self.lamp_controller.allOff,
                          "good night": self.lamp_controller.allOff}
@@ -227,9 +221,6 @@ class VoiceController:
                         command_func()
                     else:
                         LOGGER.info("Text didn't match any command.")
-
-    def partyMode(self):
-        pass
 
 
 class Handset:
@@ -371,13 +362,19 @@ class RotaryDial:
 
 
 def main():
-    num_lamps = 5
+    mapping = {"green": 0,
+               "turtle": 1,
+               "corner": 2,
+               "yellow": 3,
+               "blue": 4}
+    num_lamps = len(mapping)
     lamp_controller = LampController(num_lamps)
     rotary_dial = RotaryDial(lamp_controller)
 
     condition = threading.Condition()
     handset = Handset(condition)
-    voice_controller = VoiceController(handset, lamp_controller)
+
+    voice_controller = VoiceController(handset, lamp_controller, mapping)
 
     LOGGER.info("Started. Waiting for input.")
     voice_controller.runForever()
