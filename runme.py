@@ -10,6 +10,7 @@ import json
 import multiprocessing
 import numpy as np
 from collections import deque
+import random
 
 # Hack to enable --user packages to be used when runnig as root (which is needed for piHomeEasy, omg).
 sys.path.append("/home/pi/.local/lib/python3.7/site-packages")
@@ -170,6 +171,8 @@ class VoiceController:
                          "shut down yellow": lambda idx=mapping["yellow"]: self.lamp_controller.turnOff(idx),
                          "activate everything": self.lamp_controller.allOn,
                          "shut down everything": self.lamp_controller.allOff,
+                         "activate random": self.lamp_controller.randomOn,
+                         "shut down random": self.lamp_controller.randomOff,
                          "engage party mode": self.partyMode,
                          "let there be light": self.lamp_controller.allOn,
                          "you all suck": self.lamp_controller.allOff,
@@ -307,11 +310,31 @@ class LampController:
         LOGGER.info("All on")
         self.turnOn(-1)
 
+    def randomOn(self):
+        lamp_idx = self._getRandom(False)
+        if lamp_idx is not None:
+            self.turnOn(lamp_idx)
+
+    def randomOff(self):
+        lamp_idx = self._getRandom(True)
+        if lamp_idx is not None:
+            self.turnOff(lamp_idx)
+
     def _callPiHomeEasy(self, receiver_id, state):
         command = ["piHomeEasy", str(self.rf_pin), str(self.emitter_id), str(receiver_id), state]
         LOGGER.info(f"Call piHomeEasy: {command}")
         ret = subprocess.run(command)
         LOGGER.info(f"Exit code: {ret.returncode}")
+
+    def _getRandom(self, current_state):
+        lamps_with_current_state = []
+        for lamp_idx, state in enumerate(self.lamp_state):
+            if state == current_state:
+                lamps_with_current_state.append(lamp_idx)
+        if lamps_with_current_state:
+            return random.choice(lamps_with_current_state)
+        else:
+            return None
 
 
 class RotaryDial:
@@ -348,7 +371,7 @@ class RotaryDial:
 
 
 def main():
-    num_lamps = 2
+    num_lamps = 5
     lamp_controller = LampController(num_lamps)
     rotary_dial = RotaryDial(lamp_controller)
 
