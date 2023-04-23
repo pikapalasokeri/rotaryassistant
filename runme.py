@@ -172,7 +172,8 @@ class VoiceController:
                          "shut down random": self.lamp_controller.randomOff,
                          "let there be light": self.lamp_controller.allOn,
                          "you all suck": self.lamp_controller.allOff,
-                         "good night": self.lamp_controller.allOff}
+                         "good night": self.lamp_controller.allOff,
+                         "activate night": self.lamp_controller.nattning}
 
         self.grammar = _getGrammar(self.commands)
 
@@ -248,12 +249,14 @@ class Handset:
 
 
 class LampController:
-    def __init__(self, num_lamps):
-       self.lamp_state = [False] * num_lamps
-       self.rf_pin = 15
-       self.emitter_id = 1337
+    def __init__(self, mapping):
+        self.mapping = mapping
+        num_lamps = len(mapping)
+        self.lamp_state = [False] * num_lamps
+        self.rf_pin = 15
+        self.emitter_id = 1337
 
-       self.allOff()
+        self.allOff()
 
     def toggle(self, lamp_idx):
         LOGGER.info(f"Toggle: {lamp_idx}")
@@ -316,6 +319,16 @@ class LampController:
         if lamp_idx is not None:
             self.turnOff(lamp_idx)
 
+    def nattning(self):
+        nattning_lamps = ["turtle", "blue"]
+        lamp_idxs = [self.mapping[lamp] for lamp in nattning_lamps]
+        for lamp_idx, state in enumerate(self.lamp_state):
+            if lamp_idx in lamp_idxs:
+                self.turnOn(lamp_idx)
+            else:
+                self.turnOff(lamp_idx)
+            time.sleep(0.1)  # Don't know if this is needed or not. Maybe the improvement is placebo.
+
     def _callPiHomeEasy(self, receiver_id, state):
         command = ["piHomeEasy", str(self.rf_pin), str(self.emitter_id), str(receiver_id), state]
         LOGGER.info(f"Call piHomeEasy: {command}")
@@ -356,6 +369,10 @@ class RotaryDial:
 
         if self.pulses == 1:
             self.lamp_controller.allOff()
+        elif self.pulses == 9:
+            self.lamp_controller.nattning()
+        elif (self.pulses == 10 or self.pulses == 19): # For some reason number 9 sometimes gives 19 pulses.
+            self.lamp_controller.allOn()
         elif self.pulses > 1:
             self.lamp_controller.toggle(self.pulses - 2)
 
@@ -372,8 +389,7 @@ def main():
                "corner": 2,
                "yellow": 3,
                "blue": 4}
-    num_lamps = len(mapping)
-    lamp_controller = LampController(num_lamps)
+    lamp_controller = LampController(mapping)
     rotary_dial = RotaryDial(lamp_controller)
 
     condition = threading.Condition()
