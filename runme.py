@@ -156,6 +156,8 @@ class VoiceController:
         self.mapping = mapping
         self.commands = {"activate turtle": lambda idx=self.mapping["turtle"]: self.lamp_controller.turnOn(idx),
                          "shut down turtle": lambda idx=self.mapping["turtle"]: self.lamp_controller.turnOff(idx),
+                         "activate christmas": lambda idx=self.mapping["turtle"]: self.lamp_controller.turnOn(idx),
+                         "shut down christmas": lambda idx=self.mapping["turtle"]: self.lamp_controller.turnOff(idx),
                          "activate green": lambda idx=self.mapping["green"]: self.lamp_controller.turnOn(idx),
                          "shut down green": lambda idx=self.mapping["green"]: self.lamp_controller.turnOff(idx),
                          "activate blue": lambda idx=self.mapping["blue"]: self.lamp_controller.turnOn(idx),
